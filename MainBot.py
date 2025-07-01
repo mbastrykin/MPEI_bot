@@ -7,9 +7,7 @@ import json
 import os
 import logging
 import asyncio
-import threading
 from datetime import datetime
-import time as time_module
 
 TOKEN = '*'
 bot = telebot.TeleBot(TOKEN)
@@ -21,12 +19,10 @@ USER_RESULTS_FILE = 'user_results.json'
 
 logging.basicConfig(level=logging.INFO)
 
-# Кеш для JSON данных
 user_codes = {}
 notify_times = {}
 user_urls = {}
 user_results = {}
-
 
 URLS = [
     'https://pk.mpei.ru/info/entrants_list581.html',
@@ -113,20 +109,8 @@ URLS = [
     'https://pk.mpei.ru/info/entrants_list484.html',
     'https://pk.mpei.ru/info/entrants_list1018.html',
     'https://pk.mpei.ru/info/entrants_list125.html'
+    'https://pk.mpei.ru/info/entrants_list371.html'
 ]
-
-def load_all_data():
-    global user_codes, notify_times, user_urls, user_results
-    user_codes = load_json_file(USER_DATA_FILE)
-    notify_times = load_json_file(NOTIFY_TIMES_FILE)
-    user_urls = load_json_file(USER_URLS_FILE)
-    user_results = load_json_file(USER_RESULTS_FILE)
-
-def save_all_data():
-    save_json_file(USER_DATA_FILE, user_codes)
-    save_json_file(NOTIFY_TIMES_FILE, notify_times)
-    save_json_file(USER_URLS_FILE, user_urls)
-    save_json_file(USER_RESULTS_FILE, user_results)
 
 def load_json_file(filepath):
     if not os.path.exists(filepath):
@@ -144,6 +128,19 @@ def save_json_file(filepath, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logging.error(f"Error saving {filepath}: {e}")
+
+def load_all_data():
+    global user_codes, notify_times, user_urls, user_results
+    user_codes = load_json_file(USER_DATA_FILE)
+    notify_times = load_json_file(NOTIFY_TIMES_FILE)
+    user_urls = load_json_file(USER_URLS_FILE)
+    user_results = load_json_file(USER_RESULTS_FILE)
+
+def save_all_data():
+    save_json_file(USER_DATA_FILE, user_codes)
+    save_json_file(NOTIFY_TIMES_FILE, notify_times)
+    save_json_file(USER_URLS_FILE, user_urls)
+    save_json_file(USER_RESULTS_FILE, user_results)
 
 def get_user_code(user_id):
     return user_codes.get(str(user_id))
@@ -221,7 +218,7 @@ def callback_check(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'set_notify')
 def callback_notify(call):
-    bot.send_message(call.message.chat.id, "🕓 Введите время в формате ЧЧ:ММ, когда вы хотите получать уведомления (например, 14:30):")
+    bot.send_message(call.message.chat.id, "🕓 Введите время в формате ЧЧ:ММ, когда хотите получать уведомления (например, 14:30):")
     bot.register_next_step_handler(call.message, save_notify_time)
 
 def save_notify_time(message):
@@ -239,6 +236,7 @@ def save_notify_time(message):
 
 async def run_check(chat_id, code, first_check):
     await check_all_lists(chat_id, code, first_check)
+
 async def check_all_lists(chat_id, unique_code, first_check=False):
     found_any = False
     found_urls = []
@@ -256,7 +254,6 @@ async def check_all_lists(chat_id, unique_code, first_check=False):
 
         for idx, response in enumerate(responses):
             url = urls_to_check[idx]
-
             if isinstance(response, Exception):
                 logging.error(f"Ошибка при запросе {url}: {response}")
                 continue
@@ -264,7 +261,6 @@ async def check_all_lists(chat_id, unique_code, first_check=False):
             try:
                 response.raise_for_status()
                 soup = BeautifulSoup(response.text, 'html.parser')
-
                 program_name_tag = soup.find('div', class_='competitive-group')
                 program_name = program_name_tag.text.strip() if program_name_tag else url
 
@@ -289,10 +285,13 @@ async def check_all_lists(chat_id, unique_code, first_check=False):
                     if cells and cells[0].text.strip().isdigit():
                         position += 1
                         if cells[0].text.strip() == unique_code:
-                            score = cells[1].text.strip() if len(cells) > 1 else "не указано"
-                            if position <= vacant_places:
-                                found_any = True
-                                found_in_this_url = True
+                            score = cells[1].text.strip() if len(cells) >= 2 else "не указано"
+                            try:
+                                numeric_score = int(score)
+                            except ValueError:
+                                numeric_score = 0
+
+                            if numeric_score <= 120:
                                 msg = (
                                     f"📌 *{program_name}*\n"
                                     f"🕒 Данные на: {timestamp}\n"
@@ -300,9 +299,33 @@ async def check_all_lists(chat_id, unique_code, first_check=False):
                                     f"📊 Позиция в списке: *{position}*\n"
                                     f"🎯 Баллы: *{score}*\n"
                                     f"🪑 Вакантных мест: *{vacant_places}*\n"
-                                    f"✅ **Статус: ПРОХОДИШЬ**"
+                                    f"❌ **Статус: НЕ ПРОХОДИШЬ (баллы ≤ 120)**"
                                 )
-                                results.append(msg)
+                            else:
+                                if position <= vacant_places:
+                                    found_any = True
+                                    found_in_this_url = True
+                                    msg = (
+                                        f"📌 *{program_name}*\n"
+                                        f"🕒 Данные на: {timestamp}\n"
+                                        f"👤 Ваш код: `{unique_code}`\n"
+                                        f"📊 Позиция в списке: *{position}*\n"
+                                        f"🎯 Баллы: *{score}*\n"
+                                        f"🪑 Вакантных мест: *{vacant_places}*\n"
+                                        f"✅ **Статус: ПРОХОДИШЬ**"
+                                    )
+                                else:
+                                    msg = (
+                                        f"📌 *{program_name}*\n"
+                                        f"🕒 Данные на: {timestamp}\n"
+                                        f"👤 Ваш код: `{unique_code}`\n"
+                                        f"📊 Позиция в списке: *{position}*\n"
+                                        f"🎯 Баллы: *{score}*\n"
+                                        f"🪑 Вакантных мест: *{vacant_places}*\n"
+                                        f"❌ **Статус: НЕ ПРОХОДИШЬ (мест не хватает)**"
+                                    )
+
+                            results.append(msg)
                             break
 
                 if first_check and found_in_this_url:
@@ -311,8 +334,8 @@ async def check_all_lists(chat_id, unique_code, first_check=False):
             except Exception as e:
                 logging.error(f"Ошибка при обработке {url}: {e}")
 
-    if not found_any:
-        bot.send_message(chat_id, f"Код {unique_code} не найден в списках или не проходите.")
+    if not results:
+        bot.send_message(chat_id, f"Код {unique_code} не найден в списках.")
     else:
         set_user_results(chat_id, results)
         if first_check:
